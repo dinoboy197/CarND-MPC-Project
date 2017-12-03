@@ -1,20 +1,17 @@
 #ifndef MPC_H
 #define MPC_H
 
+#include <memory>
 #include <vector>
-#include "Eigen-3.3/Eigen/Core"
 
-using namespace std;
+#include "Eigen-3.3/Eigen/Core"
+#include "solution.h"
 
 class MPC {
  public:
-  MPC();
-
-  virtual ~MPC();
-
   // Solve the model given an initial state and polynomial coefficients.
-  // Return the first actuatotions.
-  vector<double> Solve(Eigen::VectorXd state, Eigen::VectorXd coeffs);
+  // Return the first actuations.
+  std::unique_ptr<Solution> solve(const Eigen::VectorXd state, const Eigen::VectorXd coeffs);
 };
 
 #endif /* MPC_H */
