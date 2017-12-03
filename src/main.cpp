@@ -1,32 +1,38 @@
-#include <math.h>
-#include <uWS/uWS.h>
+#include <algorithm>
 #include <chrono>
-#include <iostream>
+#include <cstdlib>
+#include <string>
 #include <thread>
-#include <vector>
+
+#include <uWS/uWS.h>
+
 #include "Eigen-3.3/Eigen/Core"
 #include "Eigen-3.3/Eigen/QR"
 #include "MPC.h"
 #include "json.hpp"
+#include "solution.h"
 
 // for convenience
 using json = nlohmann::json;
 
 // For converting back and forth between radians and degrees.
-constexpr double pi() { return M_PI; }
-double deg2rad(double x) { return x * pi() / 180; }
-double rad2deg(double x) { return x * 180 / pi(); }
+constexpr double pi() {
+  return M_PI;
+}
+double deg2rad(double x) {
+  return x * pi() / 180;
+}
 
 // Checks if the SocketIO event has JSON data.
 // If there is data the JSON object in string format will be returned,
 // else the empty string "" will be returned.
-string hasData(string s) {
+std::string hasData(std::string s) {
   auto found_null = s.find("null");
   auto b1 = s.find_first_of("[");
   auto b2 = s.rfind("}]");
-  if (found_null != string::npos) {
+  if (found_null != std::string::npos) {
     return "";
-  } else if (b1 != string::npos && b2 != string::npos) {
+  } else if (b1 != std::string::npos && b2 != std::string::npos) {
     return s.substr(b1, b2 - b1 + 2);
   }
   return "";
@@ -44,8 +50,7 @@ double polyeval(Eigen::VectorXd coeffs, double x) {
 // Fit a polynomial.
 // Adapted from
 // https://github.com/JuliaMath/Polynomials.jl/blob/master/src/Polynomials.jl#L676-L716
-Eigen::VectorXd polyfit(Eigen::VectorXd xvals, Eigen::VectorXd yvals,
-                        int order) {
+Eigen::VectorXd polyfit(Eigen::VectorXd xvals, Eigen::VectorXd yvals, int order) {
   assert(xvals.size() == yvals.size());
   assert(order >= 1 && order <= xvals.size() - 1);
   Eigen::MatrixXd A(xvals.size(), order + 1);
@@ -72,61 +77,87 @@ int main() {
   MPC mpc;
 
   h.onMessage([&mpc](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
-                     uWS::OpCode opCode) {
+      uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
     // The 4 signifies a websocket message
     // The 2 signifies a websocket event
-    string sdata = string(data).substr(0, length);
-    cout << sdata << endl;
+    auto sdata = std::string(data).substr(0, length);
+    std::cout << sdata << std::endl;
     if (sdata.size() > 2 && sdata[0] == '4' && sdata[1] == '2') {
-      string s = hasData(sdata);
+      auto s = hasData(sdata);
       if (s != "") {
         auto j = json::parse(s);
-        string event = j[0].get<string>();
+        auto event = j[0].get<std::string>();
         if (event == "telemetry") {
           // j[1] is the data JSON object
-          vector<double> ptsx = j[1]["ptsx"];
-          vector<double> ptsy = j[1]["ptsy"];
+          std::vector<double> ptsx = j[1]["ptsx"];
+          std::vector<double> ptsy = j[1]["ptsy"];
           double px = j[1]["x"];
           double py = j[1]["y"];
           double psi = j[1]["psi"];
           double v = j[1]["speed"];
 
-          /*
-          * TODO: Calculate steering angle and throttle using MPC.
-          *
-          * Both are in between [-1, 1].
-          *
-          */
-          double steer_value;
-          double throttle_value;
+          // convert waypoints in map coordinates to those in vehicle coordinates
+          std::vector<double> vehicle_ptsx;
+          std::vector<double> vehicle_ptsy;
+          for (size_t i = 0; i < ptsx.size(); ++i) {
+            double dx = ptsx[i] - px;
+            double dy = ptsy[i] - py;
+            vehicle_ptsx.push_back(dx * cos(-psi) - dy * sin(-psi));
+            vehicle_ptsy.push_back(dx * sin(-psi) + dy * cos(-psi));
+          }
+
+          // Fit to curve with 3rd order polynomial
+          auto coeffs = polyfit(Eigen::VectorXd::Map(vehicle_ptsx.data(), vehicle_ptsx.size()),
+              Eigen::VectorXd::Map(vehicle_ptsy.data(), vehicle_ptsy.size()),
+              3);
+
+          // The cross track error is calculated by evaluating at polynomial at x, f(x)
+          // and subtracting y.
+          // py and px are be zero after the map coordinate correction, otherwise
+          // this would be polyeval(coeffs, px) - py
+          auto cte = polyeval(coeffs, 0);
+
+          // Due to the sign starting at 0, the orientation error is -f'(x).
+          // derivative of coeffs[0] + coeffs[1] * x -> coeffs[1]
+          // psi is zero after the map coordinate correction, otherwise this would be psi - atan(coeffs[1])
+          auto epsi = - atan(coeffs[1]);
+
+          Eigen::VectorXd state(6);
+          // the first three values (px, py, psi) would be non-zero if we had not translated
+          // from map to vehicle coordinates
+          state << 0, 0, 0, v, cte, epsi;
+
+          // Calculate steering angle and throttle using MPC.
+          // Both are in between [-1, 1].
+          auto solution = mpc.solve(state, coeffs);
+          auto steer_value = solution->steering_actuation;
+          auto throttle_value = solution->throttle_actuation;
 
           json msgJson;
           // NOTE: Remember to divide by deg2rad(25) before you send the steering value back.
           // Otherwise the values will be in between [-deg2rad(25), deg2rad(25] instead of [-1, 1].
-          msgJson["steering_angle"] = steer_value;
+          msgJson["steering_angle"] = - steer_value / deg2rad(25);
           msgJson["throttle"] = throttle_value;
 
-          //Display the MPC predicted trajectory 
-          vector<double> mpc_x_vals;
-          vector<double> mpc_y_vals;
+          //Display the MPC predicted trajectory
 
-          //.. add (x,y) points to list here, points are in reference to the vehicle's coordinate system
-          // the points in the simulator are connected by a Green line
-
-          msgJson["mpc_x"] = mpc_x_vals;
-          msgJson["mpc_y"] = mpc_y_vals;
+          msgJson["mpc_x"] = solution->path_x;
+          msgJson["mpc_y"] = solution->path_y;
 
           //Display the waypoints/reference line
-          vector<double> next_x_vals;
-          vector<double> next_y_vals;
+          std::vector<double> next_x_vals;
+          std::vector<double> next_y_vals;
 
           //.. add (x,y) points to list here, points are in reference to the vehicle's coordinate system
           // the points in the simulator are connected by a Yellow line
+          for (size_t i = 0; i < 100; i += 5) {
+            next_x_vals.push_back((double)i);
+            next_y_vals.push_back(polyeval(coeffs, (double)i));
+          }
 
           msgJson["next_x"] = next_x_vals;
           msgJson["next_y"] = next_y_vals;
-
 
           auto msg = "42[\"steer\"," + msgJson.dump() + "]";
           std::cout << msg << std::endl;
@@ -139,7 +170,7 @@ int main() {
           //
           // NOTE: REMEMBER TO SET THIS TO 100 MILLISECONDS BEFORE
           // SUBMITTING.
-          this_thread::sleep_for(chrono::milliseconds(100));
+          std::this_thread::sleep_for(std::chrono::milliseconds(100));
           ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT);
         }
       } else {
@@ -154,7 +185,7 @@ int main() {
   // program
   // doesn't compile :-(
   h.onHttpRequest([](uWS::HttpResponse *res, uWS::HttpRequest req, char *data,
-                     size_t, size_t) {
+      size_t, size_t) {
     const std::string s = "<h1>Hello world!</h1>";
     if (req.getUrl().valueLength == 1) {
       res->end(s.data(), s.length());
@@ -169,7 +200,7 @@ int main() {
   });
 
   h.onDisconnection([&h](uWS::WebSocket<uWS::SERVER> ws, int code,
-                         char *message, size_t length) {
+      char *message, size_t length) {
     ws.close();
     std::cout << "Disconnected" << std::endl;
   });
