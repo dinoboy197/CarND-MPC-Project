@@ -12,20 +12,8 @@
 using CppAD::AD;
 
 // Set the timestep length and duration
-const size_t N = 10;
+const size_t N = 20;
 const double dt = 0.1;
-
-// This value assumes the model presented in the classroom is used.
-//
-// It was obtained by measuring the radius formed by running the vehicle in the
-// simulator around in a circle with a constant steering angle and velocity on a
-// flat terrain.
-//
-// Lf was tuned until the the radius formed by the simulating the model
-// presented in the classroom matched the previous radius.
-//
-// This is the length from front to CoG that has a similar radius.
-const double Lf = 2.67;
 
 // The solver takes all the state variables and actuator
 // variables in a singular vector. Thus, we should to establish
@@ -44,13 +32,13 @@ class FG_eval {
   // Fitted polynomial coefficients
   Eigen::VectorXd coeffs;
 
-  const int kTargetSpeed = 55;
+  const int kTargetSpeed = 25; // ~55mph
   const int kCTEPenalty = 1;
   const int kEPSIPenalty = 1;
   const int kSpeedPenalty = 1;
   const int kSteeringPenalty = 2000;
   const int kAccelerationPenalty = 1;
-  const int kSteeringDeltaPenalty = 5;
+  const int kSteeringDeltaPenalty = 50;
   const int kAccelerationDeltaPenalty = 5;
 
  public:
@@ -145,21 +133,21 @@ std::unique_ptr<Solution> MPC::solve(const Eigen::VectorXd state, const Eigen::V
   typedef CPPAD_TESTVECTOR(double) Dvector;
 
   // initial state
-  double x = state[0];
-  double y = state[1];
-  double psi = state[2];
-  double v = state[3];
-  double cte = state[4];
-  double epsi = state[5];
+  const double x = state[0];
+  const double y = state[1];
+  const double psi = state[2];
+  const double v = state[3];
+  const double cte = state[4];
+  const double epsi = state[5];
 
   // If the state is a 4 element vector, the actuators is a 2
   // element vector and there are 10 timesteps. The number of variables is:
   //
   // number of independent variables
   // N timesteps == N - 1 actuations
-  size_t n_vars = N * 6 + (N - 1) * 2;
+  const size_t n_vars = N * 6 + (N - 1) * 2;
   // Number of constraints
-  size_t n_constraints = N * 6;
+  const size_t n_constraints = N * 6;
 
   // Initial value of the independent variables.
   // SHOULD BE 0 besides initial state.
@@ -257,7 +245,7 @@ std::unique_ptr<Solution> MPC::solve(const Eigen::VectorXd state, const Eigen::V
   ok &= solution.status == CppAD::ipopt::solve_result<Dvector>::success;
 
   // Cost
-  auto cost = solution.obj_value;
+  const auto cost = solution.obj_value;
   std::cout << "Cost " << cost << std::endl;
 
   // return the steering and throttle actuator values

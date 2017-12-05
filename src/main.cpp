@@ -70,13 +70,26 @@ Eigen::VectorXd polyfit(Eigen::VectorXd xvals, Eigen::VectorXd yvals, int order)
   return result;
 }
 
+void map_to_vehicle_coordinates(const double psi, const double px, const double py,
+                                const std::vector<double> ptsx, const std::vector<double> ptsy,
+                                std::vector<double> &vehicle_ptsx, std::vector<double> &vehicle_ptsy) {
+  for (size_t i = 0; i < ptsx.size(); ++i) {
+    double dx = ptsx[i] - px;
+    double dy = ptsy[i] - py;
+    vehicle_ptsx.push_back(dx * cos(-psi) - dy * sin(-psi));
+    vehicle_ptsy.push_back(dx * sin(-psi) + dy * cos(-psi));
+  }
+}
+
 int main() {
   uWS::Hub h;
 
   // MPC is initialized here!
   MPC mpc;
+  const int latency_delay_in_ms = 100;
+  const double latency_delay = latency_delay_in_ms / 1000.0;
 
-  h.onMessage([&mpc](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
+  h.onMessage([&mpc, &latency_delay_in_ms, &latency_delay](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
       uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
     // The 4 signifies a websocket message
@@ -90,49 +103,53 @@ int main() {
         auto event = j[0].get<std::string>();
         if (event == "telemetry") {
           // j[1] is the data JSON object
-          std::vector<double> ptsx = j[1]["ptsx"];
-          std::vector<double> ptsy = j[1]["ptsy"];
-          double px = j[1]["x"];
-          double py = j[1]["y"];
-          double psi = j[1]["psi"];
-          double v = j[1]["speed"];
+          const std::vector<double> ptsx = j[1]["ptsx"];
+          const std::vector<double> ptsy = j[1]["ptsy"];
+          const double px_current = j[1]["x"];
+          const double py_current = j[1]["y"];
+          const double psi_current = j[1]["psi"];
+          const double steering_angle_current = j[1]["steering_angle"];
+          const double throttle_current = j[1]["throttle"];
+          const double v_mph_current = j[1]["speed"]; // velocity in mph
+          const auto v_mps_current = 1609.34 * v_mph_current / 3600.0; // velocity in meters per second
 
           // convert waypoints in map coordinates to those in vehicle coordinates
           std::vector<double> vehicle_ptsx;
           std::vector<double> vehicle_ptsy;
-          for (size_t i = 0; i < ptsx.size(); ++i) {
-            double dx = ptsx[i] - px;
-            double dy = ptsy[i] - py;
-            vehicle_ptsx.push_back(dx * cos(-psi) - dy * sin(-psi));
-            vehicle_ptsy.push_back(dx * sin(-psi) + dy * cos(-psi));
-          }
+          map_to_vehicle_coordinates(psi_current, px_current, py_current, ptsx, ptsy, vehicle_ptsx, vehicle_ptsy);
 
           // Fit to curve with 3rd order polynomial
-          auto coeffs = polyfit(Eigen::VectorXd::Map(vehicle_ptsx.data(), vehicle_ptsx.size()),
+          const auto coeffs = polyfit(Eigen::VectorXd::Map(vehicle_ptsx.data(), vehicle_ptsx.size()),
               Eigen::VectorXd::Map(vehicle_ptsy.data(), vehicle_ptsy.size()),
               3);
 
-          // The cross track error is calculated by evaluating at polynomial at x, f(x)
+          // The current cross track error is calculated by evaluating at polynomial at x, f(x)
           // and subtracting y.
           // py and px are be zero after the map coordinate correction, otherwise
           // this would be polyeval(coeffs, px) - py
-          auto cte = polyeval(coeffs, 0);
+          const auto cte_current = polyeval(coeffs, 0);
 
           // Due to the sign starting at 0, the orientation error is -f'(x).
           // derivative of coeffs[0] + coeffs[1] * x -> coeffs[1]
           // psi is zero after the map coordinate correction, otherwise this would be psi - atan(coeffs[1])
-          auto epsi = - atan(coeffs[1]);
+          const auto epsi_current = - atan(coeffs[1]);
+
+          // now predict cte and epsi into the future
+          const auto v_mps_future = v_mps_current + throttle_current * latency_delay;
+          const auto cte_future = cte_current + v_mps_future * sin(epsi_current) * latency_delay;
+          const auto epsi_future = epsi_current + v_mps_future * steering_angle_current * latency_delay / Lf;
 
           Eigen::VectorXd state(6);
-          // the first three values (px, py, psi) would be non-zero if we had not translated
+          // the first three values (px_future, py_future, psi_future) would be non-zero if we had not translated
           // from map to vehicle coordinates
-          state << 0, 0, 0, v, cte, epsi;
+          // use future vehicle state to account for actuator latency
+          state << 0, 0, 0, v_mps_future, cte_future, epsi_future;
 
           // Calculate steering angle and throttle using MPC.
           // Both are in between [-1, 1].
-          auto solution = mpc.solve(state, coeffs);
-          auto steer_value = solution->steering_actuation;
-          auto throttle_value = solution->throttle_actuation;
+          const auto solution = mpc.solve(state, coeffs);
+          const auto steer_value = solution->steering_actuation;
+          const auto throttle_value = solution->throttle_actuation;
 
           json msgJson;
           // NOTE: Remember to divide by deg2rad(25) before you send the steering value back.
@@ -170,7 +187,7 @@ int main() {
           //
           // NOTE: REMEMBER TO SET THIS TO 100 MILLISECONDS BEFORE
           // SUBMITTING.
-          std::this_thread::sleep_for(std::chrono::milliseconds(100));
+          std::this_thread::sleep_for(std::chrono::milliseconds(latency_delay_in_ms));
           ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT);
         }
       } else {

@@ -5,7 +5,7 @@ Self-Driving Car Engineer Nanodegree Program
 
 ## Video of vehicle control
 
-Please see a video of the MPC I implemented in this project controlling the steering of the vehicle in the Term 2 simulator [here](https://youtu.be/_ib2cnPrrmo).
+Please see a video of the MPC I implemented in this project controlling the steering of the vehicle in the Term 2 simulator [here](https://youtu.be/ExfV4IqEtCU).
 
 
 ## Implementation details
@@ -51,10 +51,9 @@ The MPC predicts `N` state vectors and `N-1` actuation vectors using a mathemati
 
 Using the cost components above, the vehicle is able to drive smoothly around the simulated track at up to ~55mph without creating hazardous driving conditions.
 
-
 ### Timestep length and Elapsed Duration
 
-A timestep length of `N` = 20 and elasped duration between timesteps of `dt` = 0.05 was initially chosen. During the parameter tuning phase of the project, it was found that this `dt` led to steering overcorrection of the vehicle, so the `dt` was doubled to 0.1. After that, the total length of the predicted course was found to be too long, leading to loops in the MPC predicted path which would occassionally send the vehicle off the course during sharp turns. By lower the timestep length to `N` = 10, the vehicle was able to drive around the path with enough future predicted states while not predicting sharp corrections.
+A timestep length of `N` = 20 and elasped duration between timesteps of `dt` = 0.05 was initially chosen. During the parameter tuning phase of the project, it was found that this `dt` led to steering overcorrection of the vehicle, so the `dt` was doubled to 0.1 and `N` halved to 10. After that, the total length of the predicted course was found to be too short, too many back and forth steering corrections. By increasing the `N` = 20, the vehicle was able to drive around the path with enough future predicted states while not predicting sharp corrections.
 
 ### Polynomial fitting and MPC pre-processing
 
@@ -62,7 +61,9 @@ Waypoints from the simulator are received in map coordinates; before they can be
 
 ### Model Predictive Control with Latency
 
-The MPC that was implemented easily handles a 100ms latency with the simulated vehicle driving at ~55mph. No specific code was required to achieve successful driving around the simulated track. However, dealing with a more complex track, or driving at a higher speed might require extra coding steps to handle this latency. One possible avenue to explore would be to use actuator measurements that are predicted to be needed several steps into the future (steps proportional to vehicle speed and timestep size), to ensure that the actuation time corresponds to actuations predicted to be needed in the future.
+Due to a 100ms simulated actuator delay between actuator value computation and actuator implementation, any actuator values computed by the MPC are 100ms out of date by the time they arrived at the simulated vehicle. Because of this, a latency adjustment is computed which, at each actuator computation, predicts the vehicle state into the future by the latency amount. This is done simply by using the same vehicle update equations above a single time before passing the state into the MPC itself.
+
+With these adjustments, the MPC that was implemented easily handles a 100ms latency with the simulated vehicle driving at ~55mph.
 
 ### Code
 
